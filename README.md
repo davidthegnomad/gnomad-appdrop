@@ -1,16 +1,19 @@
 # Gnomad AppDrop for Nobara Linux
 
-Mac-style drag-and-drop app installs for Linux.
+Mac-style drag-and-drop app installs for Linux. A [Gnomad Studio](https://gnomadstudio.org) product.
 
 Drop a `.tar.gz`, `.zip`, or `.AppImage` into **Applications** — it lands in your app menu.
+
+**Download:** [davidcole.cloud/apps/appdrop/download](https://davidcole.cloud/apps/appdrop/download)  
+**GitHub:** [davidthegnomad/gnomad-appdrop](https://github.com/davidthegnomad/gnomad-appdrop)
 
 ---
 
 ## Install (simple)
 
-1. Get the setup folder (or `Gnomad-AppDrop-*-Setup.zip` from `dist/`).
+1. Get the setup folder (or `Gnomad-AppDrop-*-Setup.zip` from the download page / `dist/`).
 2. Open it and **double-click `Install Gnomad AppDrop`**.
-3. Read the screen → click **Install** → click **Open Gnomad AppDrop**.
+3. Read the splash → click **Install** → click **Open Gnomad AppDrop**.
 
 That’s it. No terminal required.
 

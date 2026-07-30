@@ -2,10 +2,12 @@
 Version=1.0
 Type=Application
 Name=Gnomad AppDrop
-Comment=Drop archives and AppImages into Applications — Mac-style installs on Linux
+Comment=Drop archives and AppImages into Applications — Mac-style installs for Linux. By Gnomad Studio.
 Exec=@BIN@ gui
-Icon=system-software-install
+Icon=gnomad-appdrop
 Terminal=false
 Categories=Utility;System;PackageManager;
-Keywords=install;appimage;tarball;applications;
+Keywords=install;appimage;tarball;applications;gnomad;
 StartupNotify=true
+X-Gnomad-Studio=true
+X-Gnomad-Studio-URL=https://gnomadstudio.org

@@ -7,7 +7,7 @@ import sys
 import threading
 from pathlib import Path
 
-from . import config
+from . import branding, config
 from .config import ensure_dirs
 from .install import InstallError, install_path, list_installed, uninstall
 from .watcher import watch
@@ -36,28 +36,73 @@ def _open_folder(path: Path) -> None:
             continue
 
 
+def _open_url(url: str) -> None:
+    for cmd in (("xdg-open", url), ("gio", "open", url)):
+        try:
+            subprocess.Popen(  # noqa: S603
+                list(cmd),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return
+        except OSError:
+            continue
+
+
 def _run_gtk() -> int:
     import gi
 
     gi.require_version("Gtk", "3.0")
-    from gi.repository import GLib, Gtk, Gdk
+    gi.require_version("GdkPixbuf", "2.0")
+    from gi.repository import GLib, Gtk, Gdk, GdkPixbuf
+
+    # Brief branded splash before main window
+    splash_file = branding.splash_path()
+    if splash_file:
+        splash = Gtk.Window(title=branding.PRODUCT_NAME)
+        splash.set_decorated(False)
+        splash.set_position(Gtk.WindowPosition.CENTER)
+        splash.set_border_width(0)
+        try:
+            pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                str(splash_file), 640, 360, True
+            )
+            splash.add(Gtk.Image.new_from_pixbuf(pix))
+            splash.show_all()
+            GLib.timeout_add(1600, splash.destroy)
+            # Pump events so splash paints
+            for _ in range(20):
+                while Gtk.events_pending():
+                    Gtk.main_iteration_do(False)
+                import time
+
+                time.sleep(0.08)
+        except Exception:
+            splash.destroy()
 
     class AppDropWindow(Gtk.Window):
         def __init__(self) -> None:
-            super().__init__(title="Gnomad AppDrop")
-            self.set_default_size(520, 420)
+            super().__init__(title=branding.PRODUCT_NAME)
+            self.set_default_size(540, 520)
             self.set_border_width(16)
             self._stop = False
             self._watcher: threading.Thread | None = None
+            icon = branding.icon_path()
+            if icon:
+                try:
+                    self.set_icon_from_file(str(icon))
+                except Exception:
+                    pass
 
             css = b"""
             .drop-zone {
-                background-color: #1e1f24;
-                border: 2px dashed #6c8cff;
+                background-color: #0d1110;
+                border: 2px dashed #3dff9a;
                 border-radius: 12px;
                 padding: 24px;
             }
-            .title { font-size: 22px; font-weight: bold; }
+            .title { font-size: 22px; font-weight: bold; color: #7CFFB2; }
             .muted { color: #a8a8b3; }
             """
             provider = Gtk.CssProvider()
@@ -71,10 +116,27 @@ def _run_gtk() -> int:
             root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
             self.add(root)
 
-            title = Gtk.Label(label="Gnomad AppDrop")
+            header = Gtk.Box(spacing=10)
+            logo = branding.studio_logo_path() or branding.icon_path()
+            if logo:
+                try:
+                    pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                        str(logo), 48, 48, True
+                    )
+                    header.pack_start(Gtk.Image.new_from_pixbuf(pix), False, False, 0)
+                except Exception:
+                    pass
+            title_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            title = Gtk.Label(label=branding.PRODUCT_NAME)
             title.get_style_context().add_class("title")
             title.set_xalign(0)
-            root.pack_start(title, False, False, 0)
+            by = Gtk.Label(label=f"by {branding.STUDIO_NAME}")
+            by.get_style_context().add_class("muted")
+            by.set_xalign(0)
+            title_col.pack_start(title, False, False, 0)
+            title_col.pack_start(by, False, False, 0)
+            header.pack_start(title_col, False, False, 0)
+            root.pack_start(header, False, False, 0)
 
             subtitle = Gtk.Label(
                 label=(
@@ -124,6 +186,16 @@ def _run_gtk() -> int:
             self.listbox = Gtk.ListBox()
             scroll.add(self.listbox)
             root.pack_start(scroll, True, True, 0)
+
+            links = Gtk.Box(spacing=8)
+            for label, url in (
+                (branding.STUDIO_NAME, branding.STUDIO_URL),
+                ("Download page", branding.DOWNLOAD_URL),
+                ("GitHub", branding.GITHUB_URL),
+            ):
+                btn = Gtk.LinkButton(uri=url, label=label)
+                links.pack_start(btn, False, False, 0)
+            root.pack_start(links, False, False, 0)
 
             self.connect("destroy", self._on_destroy)
             self._refresh_list()
@@ -253,6 +325,9 @@ def _run_tk() -> int:
     frm.pack(fill=tk.BOTH, expand=True)
 
     ttk.Label(frm, text="Gnomad AppDrop", font=("Sans", 18, "bold")).pack(anchor="w")
+    ttk.Label(frm, text="by Gnomad Studio · gnomadstudio.org", wraplength=480).pack(
+        anchor="w", pady=(0, 4)
+    )
     ttk.Label(
         frm,
         text=(
@@ -342,6 +417,18 @@ def _run_tk() -> int:
     ).pack(side=tk.LEFT, padx=(0, 8))
     ttk.Button(btns, text="Install File…", command=pick).pack(side=tk.LEFT, padx=(0, 8))
     ttk.Button(btns, text="Remove Selected", command=remove_selected).pack(side=tk.LEFT)
+
+    link_row = ttk.Frame(frm)
+    link_row.pack(fill=tk.X, pady=(8, 0))
+    ttk.Button(
+        link_row, text="Gnomad Studio", command=lambda: _open_url(branding.STUDIO_URL)
+    ).pack(side=tk.LEFT, padx=(0, 8))
+    ttk.Button(
+        link_row, text="Download page", command=lambda: _open_url(branding.DOWNLOAD_URL)
+    ).pack(side=tk.LEFT, padx=(0, 8))
+    ttk.Button(
+        link_row, text="GitHub", command=lambda: _open_url(branding.GITHUB_URL)
+    ).pack(side=tk.LEFT)
 
     def notify(title: str, body: str) -> None:
         root.after(0, lambda: status.set(f"{title}: {body}"))

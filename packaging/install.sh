@@ -36,6 +36,22 @@ cp "$ROOT/packaging/appdrop.desktop" "$DESKTOP_DIR/appdrop.desktop"
 sed -i "s|@BIN@|$BIN_DIR/appdrop|g" "$DESKTOP_DIR/appdrop.desktop"
 chmod +x "$DESKTOP_DIR/appdrop.desktop"
 
+# Branding icon
+ICON_SRC=""
+if [[ -f "$ROOT/src/appdrop/assets/icon.png" ]]; then
+  ICON_SRC="$ROOT/src/appdrop/assets/icon.png"
+elif [[ -f "$ROOT/branding/icon.png" ]]; then
+  ICON_SRC="$ROOT/branding/icon.png"
+fi
+if [[ -n "$ICON_SRC" ]]; then
+  ICON_DEST="$HOME/.local/share/icons/hicolor/256x256/apps/gnomad-appdrop.png"
+  mkdir -p "$(dirname "$ICON_DEST")"
+  cp "$ICON_SRC" "$ICON_DEST"
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+  fi
+fi
+
 # Optional background watcher (user systemd)
 cp "$ROOT/packaging/appdrop-watch.service" "$SYSTEMD_DIR/appdrop-watch.service"
 sed -i "s|@BIN@|$BIN_DIR/appdrop|g" "$SYSTEMD_DIR/appdrop-watch.service"

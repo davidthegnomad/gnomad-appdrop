@@ -27,6 +27,10 @@ HOW YOU'LL USE IT
 2. Drop it into the Applications folder (Gnomad AppDrop opens it for you)
 3. Find the app in your menu and launch it
 
+A Gnomad Studio product
+• Website: https://gnomadstudio.org
+• Downloads & docs: https://davidcole.cloud/apps/appdrop
+
 Click Install to set this up on your computer now.
 It only installs for your user account — no admin password needed."""
 
@@ -43,7 +47,46 @@ How to use it:
 3. Drop a .AppImage or .tar.gz into that folder
 4. Wait a second — it appears in your app menu
 
+More from Gnomad Studio:
+• https://gnomadstudio.org
+• https://davidcole.cloud/apps/appdrop
+
 That’s it. Installing software should feel like drag-and-drop from now on."""
+
+
+def _splash_file() -> Path | None:
+    for candidate in (
+        ROOT / "src" / "appdrop" / "assets" / "splash.png",
+        ROOT / "branding" / "splash.png",
+        Path(__file__).resolve().parent.parent / "src" / "appdrop" / "assets" / "splash.png",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _icon_file() -> Path | None:
+    for candidate in (
+        ROOT / "src" / "appdrop" / "assets" / "icon.png",
+        ROOT / "branding" / "icon.png",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _open_url(url: str) -> None:
+    for cmd in (("xdg-open", url), ("gio", "open", url)):
+        try:
+            subprocess.Popen(  # noqa: S603
+                list(cmd),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            return
+        except OSError:
+            continue
 
 
 def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -175,15 +218,22 @@ def _try_gtk_wizard() -> bool:
         import gi
 
         gi.require_version("Gtk", "3.0")
-        from gi.repository import Gtk
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf, Gtk
     except Exception:
         return False
 
     class Wizard(Gtk.Window):
         def __init__(self) -> None:
             super().__init__(title=TITLE)
-            self.set_default_size(520, 520)
+            self.set_default_size(560, 640)
             self.set_border_width(20)
+            icon = _icon_file()
+            if icon:
+                try:
+                    self.set_icon_from_file(str(icon))
+                except Exception:
+                    pass
             self._box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
             self.add(self._box)
             self._show_welcome()
@@ -192,8 +242,38 @@ def _try_gtk_wizard() -> bool:
             for child in list(self._box.get_children()):
                 self._box.remove(child)
 
+        def _splash_widget(self) -> Gtk.Widget | None:
+            splash = _splash_file()
+            if not splash:
+                return None
+            try:
+                pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                    str(splash), 520, 280, True
+                )
+                img = Gtk.Image.new_from_pixbuf(pix)
+                img.set_halign(Gtk.Align.CENTER)
+                return img
+            except Exception:
+                return None
+
+        def _brand_links(self) -> Gtk.Box:
+            row = Gtk.Box(spacing=8)
+            studio = Gtk.LinkButton(
+                uri="https://gnomadstudio.org", label="Gnomad Studio"
+            )
+            site = Gtk.LinkButton(
+                uri="https://davidcole.cloud/apps/appdrop",
+                label="davidcole.cloud",
+            )
+            row.pack_start(studio, False, False, 0)
+            row.pack_start(site, False, False, 0)
+            return row
+
         def _show_welcome(self) -> None:
             self._clear()
+            splash = self._splash_widget()
+            if splash:
+                self._box.pack_start(splash, False, False, 0)
             head = Gtk.Label(label="Install Gnomad AppDrop")
             head.set_xalign(0)
             head.set_markup("<span size='x-large'><b>Install Gnomad AppDrop</b></span>")
@@ -204,7 +284,7 @@ def _try_gtk_wizard() -> bool:
             scroll = Gtk.ScrolledWindow()
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
             scroll.add(body)
-            scroll.set_min_content_height(280)
+            scroll.set_min_content_height(220)
 
             row = Gtk.Box(spacing=8)
             cancel = Gtk.Button(label="Cancel")
@@ -217,6 +297,7 @@ def _try_gtk_wizard() -> bool:
 
             self._box.pack_start(head, False, False, 0)
             self._box.pack_start(scroll, True, True, 0)
+            self._box.pack_start(self._brand_links(), False, False, 0)
             self._box.pack_start(row, False, False, 0)
             self.show_all()
 
@@ -245,6 +326,9 @@ def _try_gtk_wizard() -> bool:
 
         def _show_success(self) -> None:
             self._clear()
+            splash = self._splash_widget()
+            if splash:
+                self._box.pack_start(splash, False, False, 0)
             head = Gtk.Label()
             head.set_markup("<span size='x-large'><b>You're all set</b></span>")
             head.set_xalign(0)
@@ -255,7 +339,7 @@ def _try_gtk_wizard() -> bool:
             scroll = Gtk.ScrolledWindow()
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
             scroll.add(body)
-            scroll.set_min_content_height(280)
+            scroll.set_min_content_height(220)
 
             row = Gtk.Box(spacing=8)
             finish = Gtk.Button(label="Finish")
@@ -273,6 +357,7 @@ def _try_gtk_wizard() -> bool:
 
             self._box.pack_start(head, False, False, 0)
             self._box.pack_start(scroll, True, True, 0)
+            self._box.pack_start(self._brand_links(), False, False, 0)
             self._box.pack_start(row, False, False, 0)
             self.show_all()
 

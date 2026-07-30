@@ -24,6 +24,13 @@ cp -a "$ROOT/README.md" "$STAGE/"
 cp -a "$ROOT/Install-Gnomad-AppDrop" "$STAGE/"
 cp -a "$ROOT/Install Gnomad AppDrop.desktop" "$STAGE/"
 cp -a "$ROOT/START-HERE.txt" "$STAGE/" 2>/dev/null || true
+mkdir -p "$STAGE/branding" "$STAGE/src/appdrop/assets"
+mkdir -p "$STAGE/branding"
+# Ship splash/icon/logos in the Setup zip (skip large hero/og — those live on the website)
+for f in icon.png splash.png gnomad-studio-logo.png david-the-gnomad-logo.png; do
+  [[ -f "$ROOT/branding/$f" ]] && cp -a "$ROOT/branding/$f" "$STAGE/branding/"
+done
+cp -a "$ROOT/src/appdrop/assets/." "$STAGE/src/appdrop/assets/" 2>/dev/null || true
 
 chmod +x "$STAGE/Install-Gnomad-AppDrop" "$STAGE/packaging/install.sh" "$STAGE/packaging/uninstall.sh"
 
