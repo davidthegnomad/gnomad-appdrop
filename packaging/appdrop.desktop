@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Gnomad AppDrop
+Comment=Drop archives and AppImages into Applications — Mac-style installs on Linux
+Exec=@BIN@ gui
+Icon=system-software-install
+Terminal=false
+Categories=Utility;System;PackageManager;
+Keywords=install;appimage;tarball;applications;
+StartupNotify=true

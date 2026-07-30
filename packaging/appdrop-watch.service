@@ -1,0 +1,12 @@
+[Unit]
+Description=Gnomad AppDrop — watch ~/Applications for archives and AppImages
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@BIN@ watch
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

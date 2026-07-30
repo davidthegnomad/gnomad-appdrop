@@ -1,0 +1,15 @@
+Gnomad AppDrop — START HERE
+====================
+
+1. Double-click:  Install Gnomad AppDrop
+   (On GNOME: if it asks, choose "Allow Launching" or right-click → Run as Program)
+
+2. Read the short explanation, then click Install.
+
+3. When it finishes, click Open Gnomad AppDrop.
+
+After that:
+• Drop .AppImage or .tar.gz files into your Applications folder
+• They show up in your app menu automatically
+
+That’s the whole workflow.

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Install Gnomad AppDrop
+Comment=One-click setup — makes drag-and-drop app installs work on Linux
+Exec=bash -c "cd \"\$(dirname %k)\" && ./Install-Gnomad-AppDrop"
+Icon=system-software-install
+Terminal=false
+Categories=Utility;
+StartupNotify=true

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Double-click this file (or: Run as Program) to install Gnomad AppDrop.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# If launched from a .desktop in this folder, ROOT is HERE.
+# If launched from packaging/, ROOT is parent.
+if [[ -d "$HERE/src/appdrop" ]]; then
+  ROOT="$HERE"
+elif [[ -d "$HERE/../src/appdrop" ]]; then
+  ROOT="$(cd "$HERE/.." && pwd)"
+else
+  ROOT="$HERE"
+fi
+
+cd "$ROOT"
+
+# Mark trusted on GNOME if needed (best-effort; ignore failures)
+if command -v gio >/dev/null 2>&1; then
+  gio set "$HERE/Install-Gnomad-AppDrop" metadata::trusted true 2>/dev/null || true
+  DESKTOP_FILE="$HERE/Install Gnomad AppDrop.desktop"
+  if [[ -f "$DESKTOP_FILE" ]]; then
+    gio set "$DESKTOP_FILE" metadata::trusted true 2>/dev/null || true
+    chmod +x "$DESKTOP_FILE" 2>/dev/null || true
+  fi
+fi
+
+chmod +x "$HERE/Install-Gnomad-AppDrop" 2>/dev/null || true
+
+exec python3 "$ROOT/packaging/setup_wizard.py" 2>/dev/null \
+  || exec python3 "$ROOT/setup_wizard.py"
