@@ -1,3 +1,3 @@
 """Gnomad AppDrop — Mac-style drag-and-drop app installer for Nobara/Linux."""
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
