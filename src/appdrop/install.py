@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shutil
+import stat
 import tarfile
+import threading
 import zipfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -21,11 +25,16 @@ from .desktop import adopt_bundled_desktop, remove_desktop_entry, write_desktop_
 from .detect import (
     choose_main_executable,
     ensure_executable,
+    exec_hint_from_desktop,
     find_desktop_files,
     find_executables,
     find_icons,
     sanitize_app_id,
 )
+
+log = logging.getLogger("appdrop.install")
+
+_REGISTRY_LOCK = threading.Lock()
 
 
 @dataclass
@@ -67,28 +76,81 @@ def _display_name(app_id: str, raw: str) -> str:
     return pretty.replace("-", " ").title()
 
 
+def _within_dest(path: Path, dest: Path) -> bool:
+    try:
+        path.relative_to(dest)
+        return True
+    except ValueError:
+        return False
+
+
 def _safe_extract_tar(tar: tarfile.TarFile, dest: Path) -> None:
+    """Extract tar members without symlinks, devices, or path escape."""
     dest = dest.resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+
     for member in tar.getmembers():
-        member_path = (dest / member.name).resolve()
-        if not str(member_path).startswith(str(dest) + "/") and member_path != dest:
+        name = member.name.replace("\\", "/")
+        if name.startswith("/") or name.startswith("../") or "/../" in f"/{name}/":
             raise InstallError(f"Refusing unsafe tar path: {member.name}")
-    tar.extractall(path=dest)  # noqa: S202 — paths checked above
+        if member.issym() or member.islnk():
+            raise InstallError(f"Refusing symlink/hardlink in archive: {member.name}")
+        if member.isdev() or member.isfifo() or member.ischr() or member.isblk():
+            raise InstallError(f"Refusing special file in archive: {member.name}")
+        if not (member.isfile() or member.isdir()):
+            # Skip unknown types rather than extract them
+            raise InstallError(f"Unsupported tar member type: {member.name}")
+
+        target = (dest / name).resolve()
+        if not _within_dest(target, dest) and target != dest:
+            raise InstallError(f"Refusing unsafe tar path: {member.name}")
+
+        try:
+            tar.extract(member, path=dest, set_attrs=False)
+        except TypeError:
+            # Python < 3.12
+            tar.extract(member, path=dest)
+
+        # Drop setuid/setgid if present
+        if target.exists() and target.is_file():
+            mode = target.stat().st_mode
+            if mode & (stat.S_ISUID | stat.S_ISGID):
+                target.chmod(mode & ~(stat.S_ISUID | stat.S_ISGID))
 
 
 def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
+    """Extract zip members without path escape or setuid modes."""
     dest = dest.resolve()
+    dest.mkdir(parents=True, exist_ok=True)
+
     for info in zf.infolist():
-        member_path = (dest / info.filename).resolve()
-        if not str(member_path).startswith(str(dest) + "/") and member_path != dest:
+        name = info.filename.replace("\\", "/")
+        if name.startswith("/") or name.startswith("../") or "/../" in f"/{name}/":
             raise InstallError(f"Refusing unsafe zip path: {info.filename}")
-    zf.extractall(path=dest)
+
+        # Zip external_attr upper 16 bits = Unix mode when present
+        mode = (info.external_attr >> 16) & 0o7777
+        if mode and stat.S_ISLNK(mode):
+            raise InstallError(f"Refusing symlink in zip: {info.filename}")
+        if mode & (stat.S_ISUID | stat.S_ISGID):
+            raise InstallError(f"Refusing setuid/setgid in zip: {info.filename}")
+
+        target = (dest / name).resolve()
+        if not _within_dest(target, dest) and target != dest:
+            raise InstallError(f"Refusing unsafe zip path: {info.filename}")
+
+        zf.extract(info, path=dest)
+
+        if target.exists() and target.is_file():
+            st = target.stat()
+            if st.st_mode & (stat.S_ISUID | stat.S_ISGID):
+                target.chmod(st.st_mode & ~(stat.S_ISUID | stat.S_ISGID))
 
 
 def _unwrap_single_root(install_dir: Path) -> Path:
     """If archive contained one top-level folder, treat that as the app root."""
     entries = [p for p in install_dir.iterdir() if p.name not in {".", ".."}]
-    if len(entries) == 1 and entries[0].is_dir():
+    if len(entries) == 1 and entries[0].is_dir() and not entries[0].is_symlink():
         return entries[0]
     return install_dir
 
@@ -104,14 +166,18 @@ def _load_registry() -> dict[str, dict]:
 
 def _save_registry(data: dict[str, dict]) -> None:
     ensure_dirs()
-    config.REGISTRY_PATH.write_text(
+    # Atomic-ish write to reduce corruption window
+    tmp = config.REGISTRY_PATH.with_suffix(".json.tmp")
+    tmp.write_text(
         json.dumps(data, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    os.replace(tmp, config.REGISTRY_PATH)
 
 
 def list_installed() -> list[InstallResult]:
-    reg = _load_registry()
+    with _REGISTRY_LOCK:
+        reg = _load_registry()
     out: list[InstallResult] = []
     for item in reg.values():
         try:
@@ -142,19 +208,19 @@ def install_path(path: Path, *, move_source: bool = False) -> InstallResult:
     name = _display_name(app_id, raw_name)
     lower = raw_name.lower()
 
-    if any(lower.endswith(s) for s in APPIMAGE_SUFFIXES):
-        result = _install_appimage(path, app_id=app_id, name=name)
-    elif any(lower.endswith(s) for s in ARCHIVE_SUFFIXES):
-        result = _install_archive(path, app_id=app_id, name=name)
-    else:
-        raise InstallError(f"Unsupported file type: {path.name}")
+    with _REGISTRY_LOCK:
+        if any(lower.endswith(s) for s in APPIMAGE_SUFFIXES):
+            result = _install_appimage(path, app_id=app_id, name=name)
+        elif any(lower.endswith(s) for s in ARCHIVE_SUFFIXES):
+            result = _install_archive(path, app_id=app_id, name=name)
+        else:
+            raise InstallError(f"Unsupported file type: {path.name}")
 
-    reg = _load_registry()
-    reg[result.app_id] = asdict(result)
-    _save_registry(reg)
+        reg = _load_registry()
+        reg[result.app_id] = asdict(result)
+        _save_registry(reg)
 
     if move_source:
-        # Leave a copy? Prefer remove from drop folder after success
         try:
             path.unlink()
         except OSError:
@@ -208,8 +274,11 @@ def _install_archive(path: Path, *, app_id: str, name: str) -> InstallResult:
 
     root = _unwrap_single_root(install_dir)
     bundled = find_desktop_files(root)
+    hint = exec_hint_from_desktop(bundled[0], root) if bundled else None
     executables = find_executables(root)
-    main = choose_main_executable(root, app_id, executables)
+    main = choose_main_executable(
+        root, app_id, executables, preferred_name=hint
+    )
     if main is None:
         shutil.rmtree(install_dir, ignore_errors=True)
         raise InstallError(
@@ -252,15 +321,23 @@ def _install_archive(path: Path, *, app_id: str, name: str) -> InstallResult:
 
 def uninstall(app_id: str) -> None:
     app_id = sanitize_app_id(app_id)
-    reg = _load_registry()
-    entry = reg.pop(app_id, None)
-    remove_desktop_entry(app_id)
-    install_dir = config.OPT_DIR / app_id
-    if entry and entry.get("install_dir"):
-        install_dir = Path(entry["install_dir"])
-    if install_dir.exists():
-        shutil.rmtree(install_dir, ignore_errors=True)
-    _save_registry(reg)
+    with _REGISTRY_LOCK:
+        reg = _load_registry()
+        entry = reg.pop(app_id, None)
+        remove_desktop_entry(app_id)
+        install_dir = config.OPT_DIR / app_id
+        if entry and entry.get("install_dir"):
+            install_dir = Path(entry["install_dir"])
+        if install_dir.exists():
+            try:
+                shutil.rmtree(install_dir)
+            except OSError as exc:
+                log.warning(
+                    "Could not fully remove %s: %s (some files may remain)",
+                    install_dir,
+                    exc,
+                )
+        _save_registry(reg)
 
 
 def process_drop_dir(

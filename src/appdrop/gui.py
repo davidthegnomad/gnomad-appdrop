@@ -57,29 +57,32 @@ def _run_gtk() -> int:
     gi.require_version("GdkPixbuf", "2.0")
     from gi.repository import GLib, Gtk, Gdk, GdkPixbuf
 
-    # Brief branded splash before main window
+    splash_ref: dict[str, Gtk.Window | None] = {"win": None}
+
+    def _close_splash() -> bool:
+        win = splash_ref.get("win")
+        if win is not None:
+            win.destroy()
+            splash_ref["win"] = None
+        return False
+
+    # Non-blocking splash — no busy-loop (Wayland-friendly)
     splash_file = branding.splash_path()
     if splash_file:
-        splash = Gtk.Window(title=branding.PRODUCT_NAME)
-        splash.set_decorated(False)
-        splash.set_position(Gtk.WindowPosition.CENTER)
-        splash.set_border_width(0)
         try:
+            splash = Gtk.Window(title=branding.PRODUCT_NAME)
+            splash.set_decorated(False)
+            splash.set_position(Gtk.WindowPosition.CENTER)
+            splash.set_border_width(0)
             pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(
                 str(splash_file), 640, 360, True
             )
             splash.add(Gtk.Image.new_from_pixbuf(pix))
             splash.show_all()
-            GLib.timeout_add(1600, splash.destroy)
-            # Pump events so splash paints
-            for _ in range(20):
-                while Gtk.events_pending():
-                    Gtk.main_iteration_do(False)
-                import time
-
-                time.sleep(0.08)
+            splash_ref["win"] = splash
+            GLib.timeout_add(1400, _close_splash)
         except Exception:
-            splash.destroy()
+            splash_ref["win"] = None
 
     class AppDropWindow(Gtk.Window):
         def __init__(self) -> None:

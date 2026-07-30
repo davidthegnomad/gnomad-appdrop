@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import re
+import shlex
 import stat
 from pathlib import Path
 
@@ -17,19 +17,28 @@ _ELF = b"\x7fELF"
 _SCRIPT = b"#!"
 
 
-def is_probably_executable(path: Path) -> bool:
-    if not path.is_file() or path.is_symlink():
-        # Follow only if target exists and is a file
-        if path.is_symlink():
-            try:
-                target = path.resolve(strict=True)
-            except (OSError, RuntimeError):
-                return False
-            if not target.is_file():
-                return False
-            path = target
-        else:
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError, RuntimeError):
+        return False
+
+
+def is_probably_executable(path: Path, *, root: Path | None = None) -> bool:
+    # Never treat a symlink itself as the main binary unless its target stays in-tree
+    if path.is_symlink():
+        try:
+            target = path.resolve(strict=True)
+        except (OSError, RuntimeError):
             return False
+        if root is not None and not _is_under(target, root):
+            return False
+        if not target.is_file():
+            return False
+        path = target
+    elif not path.is_file():
+        return False
 
     name = path.name.lower()
     if name.endswith(
@@ -55,14 +64,25 @@ def is_probably_executable(path: Path) -> bool:
 
 
 def find_desktop_files(root: Path) -> list[Path]:
-    return sorted(root.rglob(DESKTOP_GLOB))
+    found: list[Path] = []
+    for path in root.rglob(DESKTOP_GLOB):
+        if path.is_symlink():
+            continue
+        if path.is_file():
+            found.append(path)
+    return sorted(found)
 
 
 def find_icons(root: Path) -> list[Path]:
     icons: list[Path] = []
     for pattern in ICON_GLOBS:
-        icons.extend(root.rglob(pattern))
-    # Prefer larger / named icons roughly by path depth then name
+        for path in root.rglob(pattern):
+            if path.is_symlink() or not path.is_file():
+                continue
+            if not _is_under(path, root):
+                continue
+            icons.append(path)
+
     def score(p: Path) -> tuple:
         n = p.name.lower()
         size_hint = 0
@@ -79,16 +99,62 @@ def find_icons(root: Path) -> list[Path]:
 
 def find_executables(root: Path) -> list[Path]:
     found: list[Path] = []
-    for path in root.rglob("*"):
-        if is_probably_executable(path):
-            found.append(path)
+    # follow_symlinks=False via manual walk to avoid escaping the tree
+    for dirpath, dirnames, filenames in os_walk_nofollow(root):
+        # Don't descend into symlinked dirs
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if not (Path(dirpath) / d).is_symlink()
+        ]
+        for name in filenames:
+            path = Path(dirpath) / name
+            if is_probably_executable(path, root=root):
+                found.append(path)
     return found
+
+
+def os_walk_nofollow(root: Path):
+    import os
+
+    return os.walk(root, followlinks=False)
+
+
+def exec_hint_from_desktop(desktop: Path, root: Path) -> str | None:
+    """Return the binary basename/path token from a vendor Exec= line."""
+    try:
+        text = desktop.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    in_entry = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("[") and line.endswith("]"):
+            in_entry = line == "[Desktop Entry]"
+            continue
+        if not in_entry or not line.startswith("Exec="):
+            continue
+        rest = line[5:].strip()
+        try:
+            parts = shlex.split(rest, posix=True)
+        except ValueError:
+            parts = rest.split()
+        if not parts:
+            return None
+        token = parts[0]
+        # Strip field-code-only tokens
+        if token.startswith("%"):
+            return None
+        return Path(token).name
+    return None
 
 
 def choose_main_executable(
     root: Path,
     app_name: str,
     candidates: list[Path] | None = None,
+    *,
+    preferred_name: str | None = None,
 ) -> Path | None:
     if candidates is None:
         candidates = find_executables(root)
@@ -96,6 +162,13 @@ def choose_main_executable(
         return None
     if len(candidates) == 1:
         return candidates[0]
+
+    # Prefer exact match from bundled desktop Exec=
+    if preferred_name:
+        pref = preferred_name.lower()
+        for path in candidates:
+            if path.name.lower() == pref or path.stem.lower() == Path(pref).stem.lower():
+                return path
 
     app_l = app_name.lower().replace(" ", "").replace("-", "").replace("_", "")
     scored: list[tuple[int, Path]] = []
@@ -108,6 +181,8 @@ def choose_main_executable(
 
         if name == "apprun":
             score += 100
+        if preferred_name and preferred_name.lower() in (name, stem):
+            score += 90
         if stem.replace("-", "").replace("_", "") == app_l:
             score += 80
         if app_l and app_l in stem.replace("-", "").replace("_", ""):
@@ -122,6 +197,9 @@ def choose_main_executable(
         score -= max(0, len(path.relative_to(root).parts) - 3) * 5
         if "helper" in rel or "crash" in rel or "plugin" in rel:
             score -= 40
+        # Common helper tool names
+        if name in {"ffmpeg", "ffprobe", "curl", "wget", "python", "python3", "node"}:
+            score -= 30
         scored.append((score, path))
 
     scored.sort(key=lambda t: (-t[0], str(t[1])))
@@ -129,6 +207,8 @@ def choose_main_executable(
 
 
 def ensure_executable(path: Path) -> None:
+    if path.is_symlink():
+        return
     mode = path.stat().st_mode
     path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 

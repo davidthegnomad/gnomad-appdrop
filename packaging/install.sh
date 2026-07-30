@@ -33,7 +33,13 @@ chmod +x "$BIN_DIR/appdrop"
 
 # Desktop launcher for the GUI
 cp "$ROOT/packaging/appdrop.desktop" "$DESKTOP_DIR/appdrop.desktop"
-sed -i "s|@BIN@|$BIN_DIR/appdrop|g" "$DESKTOP_DIR/appdrop.desktop"
+python3 - "$DESKTOP_DIR/appdrop.desktop" "$BIN_DIR/appdrop" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+bin_path = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+path.write_text(text.replace("@BIN@", bin_path), encoding="utf-8")
+PY
 chmod +x "$DESKTOP_DIR/appdrop.desktop"
 
 # Branding icon
@@ -54,7 +60,13 @@ fi
 
 # Optional background watcher (user systemd)
 cp "$ROOT/packaging/appdrop-watch.service" "$SYSTEMD_DIR/appdrop-watch.service"
-sed -i "s|@BIN@|$BIN_DIR/appdrop|g" "$SYSTEMD_DIR/appdrop-watch.service"
+python3 - "$SYSTEMD_DIR/appdrop-watch.service" "$BIN_DIR/appdrop" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+bin_path = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+path.write_text(text.replace("@BIN@", bin_path), encoding="utf-8")
+PY
 
 # Optional GTK for window drag-and-drop
 if command -v dnf >/dev/null 2>&1; then

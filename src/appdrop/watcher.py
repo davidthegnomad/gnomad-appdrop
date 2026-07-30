@@ -16,17 +16,39 @@ log = logging.getLogger("appdrop.watcher")
 NotifyFn = Callable[[str, str], None]  # title, body
 
 
-def _file_stable(path: Path, settle_seconds: float = 1.5) -> bool:
-    """Wait until size stops changing (download / copy finished)."""
+def _file_stable(
+    path: Path,
+    *,
+    settle_seconds: float = 2.5,
+    checks: int = 3,
+    interval: float = 1.0,
+) -> bool:
+    """Require size unchanged across several polls and mtime older than settle."""
     try:
-        size = path.stat().st_size
+        prev = path.stat().st_size
+        if prev <= 0:
+            return False
     except OSError:
         return False
-    time.sleep(settle_seconds)
+
+    for _ in range(checks - 1):
+        time.sleep(interval)
+        try:
+            st = path.stat()
+        except OSError:
+            return False
+        if st.st_size != prev or st.st_size <= 0:
+            return False
+        prev = st.st_size
+
     try:
-        return path.stat().st_size == size and size > 0
+        st = path.stat()
     except OSError:
         return False
+    # Also require the file hasn't been written recently
+    if (time.time() - st.st_mtime) < settle_seconds:
+        return False
+    return st.st_size > 0
 
 
 def watch(
@@ -40,6 +62,7 @@ def watch(
     directory = directory or config.APPLICATIONS_DIR
     ensure_dirs()
     seen: set[str] = set()
+    pending_stable: dict[str, int] = {}
     # Ignore files already present at startup unless they're new drops
     for path in directory.iterdir():
         if path.is_file():
@@ -67,7 +90,15 @@ def watch(
                 seen.add(name)
                 continue
             if not _file_stable(path):
+                # Don't mark seen yet — retry next poll
+                pending_stable[name] = pending_stable.get(name, 0) + 1
+                if pending_stable[name] > 120:
+                    # Give up after ~4 min of instability
+                    log.warning("Giving up on unstable file: %s", name)
+                    seen.add(name)
+                    pending_stable.pop(name, None)
                 continue
+            pending_stable.pop(name, None)
             try:
                 result = install_path(path, move_source=move_source)
                 _announce(result, notify)
@@ -84,6 +115,7 @@ def watch(
 
         # Allow re-drop of same filename later
         seen &= names
+        pending_stable = {k: v for k, v in pending_stable.items() if k in names}
         # If move_source removed the file, drop from seen so a new copy can install
         seen = {n for n in seen if (directory / n).exists() or n in names}
 
