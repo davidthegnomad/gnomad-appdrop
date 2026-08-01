@@ -18,8 +18,8 @@
 ## Ship checklist
 
 - [x] Tests green (22)
-- [ ] GitHub release `v1.1.0` + Setup zip
-- [ ] davidcole.cloud apps data → 1.1.0 + deploy
+- [x] GitHub release `v1.1.0` + Setup zip (`23300a6`)
+- [x] davidcole.cloud apps data → 1.1.0 (`44c61a0`) + Hostinger deploy CI
 
 ## Notes
 
