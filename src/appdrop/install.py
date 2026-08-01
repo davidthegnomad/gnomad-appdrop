@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import stat
+import subprocess
 import tarfile
 import threading
 import zipfile
@@ -14,10 +15,11 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import config
+from . import config, debpkg
 from .config import (
     APPIMAGE_SUFFIXES,
     ARCHIVE_SUFFIXES,
+    DEB_SUFFIXES,
     SUPPORTED_SUFFIXES,
     ensure_dirs,
 )
@@ -31,10 +33,12 @@ from .detect import (
     find_icons,
     sanitize_app_id,
 )
+from .metadata import AppIdentity, probe_identity, read_desktop_name
 
 log = logging.getLogger("appdrop.install")
 
 _REGISTRY_LOCK = threading.Lock()
+_EXEC_BITS = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
 
 
 @dataclass
@@ -53,29 +57,6 @@ class InstallError(Exception):
     pass
 
 
-def _strip_known_suffix(name: str) -> str:
-    lower = name.lower()
-    for suffix in sorted(SUPPORTED_SUFFIXES, key=len, reverse=True):
-        if lower.endswith(suffix):
-            return name[: -len(suffix)]
-    return Path(name).stem
-
-
-def _display_name(app_id: str, raw: str) -> str:
-    base = _strip_known_suffix(raw)
-    # Drop trailing version-ish bits: foo-1.2.3
-    parts = base.replace("_", "-").split("-")
-    cleaned: list[str] = []
-    for part in parts:
-        if part and part[0].isdigit() and any(c.isdigit() for c in part):
-            # stop at first version-looking token if we already have a name
-            if cleaned:
-                break
-        cleaned.append(part)
-    pretty = " ".join(cleaned) if cleaned else app_id
-    return pretty.replace("-", " ").title()
-
-
 def _within_dest(path: Path, dest: Path) -> bool:
     try:
         path.relative_to(dest)
@@ -84,8 +65,31 @@ def _within_dest(path: Path, dest: Path) -> bool:
         return False
 
 
-def _safe_extract_tar(tar: tarfile.TarFile, dest: Path) -> None:
-    """Extract tar members without symlinks, devices, or path escape."""
+def _link_stays_in_tree(member: tarfile.TarInfo) -> bool:
+    """Lexical containment check for a link target (no filesystem access)."""
+    link = member.linkname.replace("\\", "/")
+    if not link or link.startswith("/"):
+        return False
+    if member.islnk():
+        # Hardlink targets are archive-root relative
+        base = ""
+    else:
+        base = os.path.dirname(member.name.replace("\\", "/"))
+    resolved = os.path.normpath(os.path.join(base, link))
+    return resolved != ".." and not resolved.startswith("../")
+
+
+def _safe_extract_tar(
+    tar: tarfile.TarFile,
+    dest: Path,
+    *,
+    allow_links: bool = False,
+) -> None:
+    """Extract tar members without devices or path escape.
+
+    Symlinks are refused outright unless ``allow_links`` is set (Debian
+    payloads need them); even then only in-tree targets are recreated.
+    """
     dest = dest.resolve()
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -94,10 +98,20 @@ def _safe_extract_tar(tar: tarfile.TarFile, dest: Path) -> None:
         if name.startswith("/") or name.startswith("../") or "/../" in f"/{name}/":
             raise InstallError(f"Refusing unsafe tar path: {member.name}")
         if member.issym() or member.islnk():
-            raise InstallError(f"Refusing symlink/hardlink in archive: {member.name}")
+            if not allow_links:
+                raise InstallError(
+                    f"Refusing symlink/hardlink in archive: {member.name}"
+                )
+            if not _link_stays_in_tree(member):
+                log.debug(
+                    "Skipping out-of-tree link %s -> %s",
+                    member.name,
+                    member.linkname,
+                )
+                continue
         if member.isdev() or member.isfifo() or member.ischr() or member.isblk():
             raise InstallError(f"Refusing special file in archive: {member.name}")
-        if not (member.isfile() or member.isdir()):
+        if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
             # Skip unknown types rather than extract them
             raise InstallError(f"Unsupported tar member type: {member.name}")
 
@@ -111,11 +125,14 @@ def _safe_extract_tar(tar: tarfile.TarFile, dest: Path) -> None:
             # Python < 3.12
             tar.extract(member, path=dest)
 
-        # Drop setuid/setgid if present
-        if target.exists() and target.is_file():
-            mode = target.stat().st_mode
-            if mode & (stat.S_ISUID | stat.S_ISGID):
-                target.chmod(mode & ~(stat.S_ISUID | stat.S_ISGID))
+        # Drop setuid/setgid, but keep the executable bits the archive recorded.
+        # Helper binaries (Chrome's crashpad handler, updaters) are never the
+        # detected "main" binary, so they must come out runnable on their own.
+        if not target.is_symlink() and target.exists() and target.is_file():
+            mode = target.stat().st_mode & ~(stat.S_ISUID | stat.S_ISGID)
+            mode |= member.mode & _EXEC_BITS
+            if mode != target.stat().st_mode:
+                target.chmod(mode)
 
 
 def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
@@ -141,10 +158,11 @@ def _safe_extract_zip(zf: zipfile.ZipFile, dest: Path) -> None:
 
         zf.extract(info, path=dest)
 
-        if target.exists() and target.is_file():
-            st = target.stat()
-            if st.st_mode & (stat.S_ISUID | stat.S_ISGID):
-                target.chmod(st.st_mode & ~(stat.S_ISUID | stat.S_ISGID))
+        if target.exists() and target.is_file() and not target.is_symlink():
+            current = target.stat().st_mode
+            new_mode = (current & ~(stat.S_ISUID | stat.S_ISGID)) | (mode & _EXEC_BITS)
+            if new_mode != current:
+                target.chmod(new_mode)
 
 
 def _unwrap_single_root(install_dir: Path) -> Path:
@@ -203,16 +221,17 @@ def install_path(path: Path, *, move_source: bool = False) -> InstallResult:
         )
 
     ensure_dirs()
-    raw_name = path.name
-    app_id = sanitize_app_id(_strip_known_suffix(raw_name))
-    name = _display_name(app_id, raw_name)
-    lower = raw_name.lower()
+    identity = probe_identity(path)
+    lower = path.name.lower()
+    is_deb = any(lower.endswith(s) for s in DEB_SUFFIXES)
 
     with _REGISTRY_LOCK:
         if any(lower.endswith(s) for s in APPIMAGE_SUFFIXES):
-            result = _install_appimage(path, app_id=app_id, name=name)
+            result = _install_appimage(path, identity=identity)
+        elif is_deb:
+            result = _install_deb(path, identity=identity)
         elif any(lower.endswith(s) for s in ARCHIVE_SUFFIXES):
-            result = _install_archive(path, app_id=app_id, name=name)
+            result = _install_archive(path, identity=identity)
         else:
             raise InstallError(f"Unsupported file type: {path.name}")
 
@@ -229,7 +248,9 @@ def install_path(path: Path, *, move_source: bool = False) -> InstallResult:
     return result
 
 
-def _install_appimage(path: Path, *, app_id: str, name: str) -> InstallResult:
+def _install_appimage(path: Path, *, identity: AppIdentity) -> InstallResult:
+    app_id = sanitize_app_id(identity.app_id)
+    name = identity.name.strip() or app_id
     install_dir = config.OPT_DIR / app_id
     if install_dir.exists():
         shutil.rmtree(install_dir)
@@ -239,11 +260,16 @@ def _install_appimage(path: Path, *, app_id: str, name: str) -> InstallResult:
     shutil.copy2(path, dest)
     ensure_executable(dest)
 
+    icon = identity.icon_hint or None
     desktop = write_desktop_entry(
         app_id=app_id,
         name=name,
         exec_path=dest,
-        comment=f"Installed by Gnomad AppDrop from {path.name}",
+        icon=icon,
+        comment=identity.comment
+        or f"Installed by Gnomad AppDrop from {path.name}",
+        categories=identity.categories or "Utility;",
+        keywords=identity.keywords,
         path_cwd=install_dir,
     )
     return InstallResult(
@@ -258,7 +284,8 @@ def _install_appimage(path: Path, *, app_id: str, name: str) -> InstallResult:
     )
 
 
-def _install_archive(path: Path, *, app_id: str, name: str) -> InstallResult:
+def _install_archive(path: Path, *, identity: AppIdentity) -> InstallResult:
+    app_id = sanitize_app_id(identity.app_id)
     install_dir = config.OPT_DIR / app_id
     if install_dir.exists():
         shutil.rmtree(install_dir)
@@ -272,9 +299,46 @@ def _install_archive(path: Path, *, app_id: str, name: str) -> InstallResult:
         with tarfile.open(path, "r:*") as tar:
             _safe_extract_tar(tar, install_dir)
 
+    return _register_tree(
+        path, install_dir=install_dir, identity=identity, kind="archive"
+    )
+
+
+def _install_deb(path: Path, *, identity: AppIdentity) -> InstallResult:
+    """Unpack a .deb payload locally — no dpkg, no system-wide changes."""
+    app_id = sanitize_app_id(identity.app_id)
+    install_dir = config.OPT_DIR / app_id
+    if install_dir.exists():
+        shutil.rmtree(install_dir)
+    install_dir.mkdir(parents=True)
+
+    try:
+        with debpkg.open_data_tar(path) as tar:
+            _safe_extract_tar(tar, install_dir, allow_links=True)
+    except debpkg.DebError as exc:
+        shutil.rmtree(install_dir, ignore_errors=True)
+        raise InstallError(str(exc)) from exc
+
+    return _register_tree(
+        path, install_dir=install_dir, identity=identity, kind="deb"
+    )
+
+
+def _register_tree(
+    path: Path,
+    *,
+    install_dir: Path,
+    identity: AppIdentity,
+    kind: str,
+) -> InstallResult:
+    """Find the app inside an extracted tree and register a launcher."""
+    app_id = sanitize_app_id(identity.app_id)
+    name = identity.name.strip() or app_id
     root = _unwrap_single_root(install_dir)
     bundled = find_desktop_files(root)
-    hint = exec_hint_from_desktop(bundled[0], root) if bundled else None
+    hint = identity.exec_hint or (
+        exec_hint_from_desktop(bundled[0], root) if bundled else None
+    )
     executables = find_executables(root)
     main = choose_main_executable(
         root, app_id, executables, preferred_name=hint
@@ -287,8 +351,15 @@ def _install_archive(path: Path, *, app_id: str, name: str) -> InstallResult:
         )
 
     ensure_executable(main)
+    if kind == "deb":
+        # Packages ship wrappers that call sibling binaries; tar attrs were dropped.
+        for candidate in executables:
+            try:
+                ensure_executable(candidate)
+            except OSError:
+                continue
     icons = find_icons(root)
-    icon = icons[0] if icons else None
+    icon = icons[0] if icons else (identity.icon_hint or None)
 
     if bundled:
         desktop = adopt_bundled_desktop(
@@ -297,13 +368,20 @@ def _install_archive(path: Path, *, app_id: str, name: str) -> InstallResult:
             exec_path=main,
             install_root=root,
         )
+        # Vendor .desktop Name is the most accurate post-extract label
+        vendor_name = read_desktop_name(desktop)
+        if vendor_name:
+            name = vendor_name
     else:
         desktop = write_desktop_entry(
             app_id=app_id,
             name=name,
             exec_path=main,
             icon=icon,
-            comment=f"Installed by Gnomad AppDrop from {path.name}",
+            comment=identity.comment
+            or f"Installed by Gnomad AppDrop from {path.name}",
+            categories=identity.categories or "Utility;",
+            keywords=identity.keywords,
             path_cwd=main.parent,
         )
 
@@ -314,9 +392,58 @@ def _install_archive(path: Path, *, app_id: str, name: str) -> InstallResult:
         install_dir=str(install_dir),
         exec_path=str(main),
         desktop_path=str(desktop),
-        kind="archive",
+        kind=kind,
         installed_at=datetime.now(timezone.utc).isoformat(),
     )
+
+
+def launch(app_id: str) -> None:
+    """Open an AppDrop-installed app (menu-equivalent launch)."""
+    app_id = sanitize_app_id(app_id)
+    with _REGISTRY_LOCK:
+        reg = _load_registry()
+        entry = reg.get(app_id)
+    if not entry:
+        raise InstallError(f"No installed app named {app_id!r}")
+
+    desktop = Path(entry.get("desktop_path") or "")
+    exec_path = Path(entry.get("exec_path") or "")
+    cwd = Path(entry.get("install_dir") or "")
+
+    # Prefer FreeDesktop launch so env/Path= from the .desktop apply
+    if desktop.is_file():
+        for cmd in (
+            ("gtk-launch", desktop.stem),
+            ("gio", "launch", str(desktop)),
+            ("xdg-open", str(desktop)),
+        ):
+            try:
+                subprocess.Popen(  # noqa: S603
+                    list(cmd),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                return
+            except OSError:
+                continue
+
+    if not exec_path.is_file():
+        raise InstallError(f"Missing executable for {app_id}")
+
+    popen_cwd = None
+    if cwd.is_dir():
+        popen_cwd = str(cwd)
+    try:
+        subprocess.Popen(  # noqa: S603
+            [str(exec_path)],
+            cwd=popen_cwd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise InstallError(f"Could not open {app_id}: {exc}") from exc
 
 
 def uninstall(app_id: str) -> None:

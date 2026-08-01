@@ -67,6 +67,7 @@ def _splash_file() -> Path | None:
 
 def _icon_file() -> Path | None:
     for candidate in (
+        ROOT / "src" / "appdrop" / "assets" / "llama-logo.png",
         ROOT / "src" / "appdrop" / "assets" / "icon.png",
         ROOT / "branding" / "icon.png",
     ):

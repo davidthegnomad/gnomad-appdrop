@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "appdrop"
-version = "1.0.1"
+version = "1.1.0"
 description = "Gnomad AppDrop — Mac-style drag-and-drop app installer for Linux"
 readme = "README.md"
 requires-python = ">=3.10"

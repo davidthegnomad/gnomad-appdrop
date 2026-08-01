@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/vnd.appimage">
+    <comment>AppImage application</comment>
+    <comment xml:lang="en">AppImage application</comment>
+    <glob weight="80" pattern="*.AppImage"/>
+    <glob weight="80" pattern="*.appimage"/>
+  </mime-type>
+</mime-info>

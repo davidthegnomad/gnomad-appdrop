@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.1.0}"
 OUT_DIR="${OUT_DIR:-$ROOT/dist}"
 STAGE="$OUT_DIR/Gnomad-AppDrop-Setup"
 ZIP="$OUT_DIR/Gnomad-AppDrop-${VERSION}-Setup.zip"
@@ -19,6 +19,7 @@ cp -a "$ROOT/packaging/uninstall.sh" "$STAGE/packaging/"
 cp -a "$ROOT/packaging/setup_wizard.py" "$STAGE/packaging/"
 cp -a "$ROOT/packaging/appdrop.desktop" "$STAGE/packaging/"
 cp -a "$ROOT/packaging/appdrop-watch.service" "$STAGE/packaging/"
+cp -a "$ROOT/packaging/gnomad-appdrop.xml" "$STAGE/packaging/" 2>/dev/null || true
 cp -a "$ROOT/pyproject.toml" "$STAGE/"
 cp -a "$ROOT/README.md" "$STAGE/"
 cp -a "$ROOT/Install-Gnomad-AppDrop" "$STAGE/"

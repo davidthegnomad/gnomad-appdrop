@@ -69,6 +69,7 @@ def write_desktop_entry(
     icon: str | Path | None = None,
     comment: str = "",
     categories: str = "Utility;",
+    keywords: str = "",
     terminal: bool = False,
     path_cwd: Path | None = None,
 ) -> Path:
@@ -103,6 +104,9 @@ def write_desktop_entry(
     ]
     if comment:
         lines.append(f"Comment={comment}")
+    if keywords:
+        kw = keywords if keywords.endswith(";") else f"{keywords};"
+        lines.append(f"Keywords={kw}")
     if icon_value:
         lines.append(f"Icon={icon_value}")
     if path_cwd is not None:

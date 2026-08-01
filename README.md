@@ -2,10 +2,12 @@
 
 Mac-style drag-and-drop app installs for Linux. A [Gnomad Studio](https://gnomadstudio.org) product.
 
-Drop a `.tar.gz`, `.zip`, or `.AppImage` into **Applications** — it lands in your app menu.
+Drop a `.tar.gz`, `.zip`, `.AppImage`, or `.deb` into **Applications** — it lands in your app menu.
 
 **Download:** [davidcole.cloud/apps/appdrop/download](https://davidcole.cloud/apps/appdrop/download)  
-**GitHub:** [davidthegnomad/gnomad-appdrop](https://github.com/davidthegnomad/gnomad-appdrop)
+**GitHub:** [davidthegnomad/gnomad-appdrop](https://github.com/davidthegnomad/gnomad-appdrop)  
+**Support:** [david@gnomad.studio](mailto:david@gnomad.studio)  
+**Report a bug:** [GitHub Issues](https://github.com/davidthegnomad/gnomad-appdrop/issues/new)
 
 ---
 
@@ -56,11 +58,26 @@ Copy that zip to your Nobara PC.
 ```bash
 appdrop gui
 appdrop list
+appdrop open <id>
 appdrop uninstall <id>
 ```
+
+---
+
+## Support
+
+Email **david@gnomad.studio** or [open a GitHub issue](https://github.com/davidthegnomad/gnomad-appdrop/issues/new).
 
 ## Notes
 
 - Stdlib-only core. Optional: `sudo dnf install python3-gobject gtk3` for window drag-and-drop in the GUI.
 - Source-only tarballs (need compile) are rejected with a clear message.
 - Uninstall Gnomad AppDrop: `./packaging/uninstall.sh`
+
+### About `.deb` packages
+
+`.deb` files are unpacked into `~/.local/opt` and given a menu launcher — nothing
+is installed system-wide and `dpkg` is never called. Packages that bundle their
+own libraries (Chrome, VS Code, Discord, Slack) generally work. Packages that
+expect system dependencies may not run, since those dependencies are not
+installed. For those, use your distro's package manager instead.

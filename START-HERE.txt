@@ -9,11 +9,15 @@ Gnomad AppDrop — START HERE
 3. When it finishes, click Open Gnomad AppDrop.
 
 After that:
-• Drop .AppImage or .tar.gz files into your Applications folder
+• Drop .AppImage, .deb, or .tar.gz files into your Applications folder
 • They show up in your app menu automatically
 
 Gnomad Studio
 • https://gnomadstudio.org
 • https://davidcole.cloud/apps/appdrop
+
+Support
+• david@gnomad.studio
+• Report a bug: https://github.com/davidthegnomad/gnomad-appdrop/issues/new
 
 That’s the whole workflow.

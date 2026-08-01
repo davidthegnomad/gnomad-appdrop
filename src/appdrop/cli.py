@@ -9,7 +9,14 @@ from pathlib import Path
 
 from . import __version__, config
 from .config import ensure_dirs
-from .install import InstallError, install_path, list_installed, process_drop_dir, uninstall
+from .install import (
+    InstallError,
+    install_path,
+    launch,
+    list_installed,
+    process_drop_dir,
+    uninstall,
+)
 from .watcher import watch
 
 
@@ -18,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="appdrop",
         description=(
             "Mac-style app installer for Nobara/Linux: drop .tar.gz / .AppImage "
-            f"into {config.APPLICATIONS_DIR} and get a menu launcher."
+            f"/ .deb into {config.APPLICATIONS_DIR} and get a menu launcher."
         ),
     )
     parser.add_argument("--version", action="version", version=f"Gnomad AppDrop {__version__}")
@@ -68,10 +75,22 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("list", help="List apps installed by Gnomad AppDrop")
 
+    p_open = sub.add_parser("open", help="Launch an AppDrop-installed app")
+    p_open.add_argument("app_id", help="App id (see: appdrop list)")
+
     p_rm = sub.add_parser("uninstall", help="Remove an Gnomad AppDrop-installed app")
     p_rm.add_argument("app_id", help="App id (see: appdrop list)")
 
-    sub.add_parser("gui", help="Open the Gnomad AppDrop window")
+    p_gui = sub.add_parser(
+        "gui",
+        help="Open the Gnomad AppDrop window (optional files for Open With)",
+    )
+    p_gui.add_argument(
+        "paths",
+        nargs="*",
+        type=Path,
+        help="Files from right-click Open With — opens AppDrop for drag-to-Applications",
+    )
     sub.add_parser("init", help="Create ~/Applications and related folders")
 
     args = parser.parse_args(argv)
@@ -131,6 +150,15 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{app.app_id:24} {app.name:24} {app.kind:8} {app.exec_path}")
         return 0
 
+    if args.cmd == "open":
+        try:
+            launch(args.app_id)
+        except InstallError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"Opening {args.app_id}")
+        return 0
+
     if args.cmd == "uninstall":
         uninstall(args.app_id)
         print(f"Removed {args.app_id}")
@@ -139,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "gui":
         from .gui import run_gui
 
-        return run_gui()
+        return run_gui(getattr(args, "paths", None))
 
     parser.error(f"Unknown command: {args.cmd}")
     return 2
